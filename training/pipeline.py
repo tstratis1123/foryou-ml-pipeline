@@ -2,12 +2,13 @@
 
 Orchestrates the full avatar training pipeline:
 1. Download training images from S3
-2. Preprocess (face detection, alignment, augmentation, captioning)
-3. Train LoRA adapters on SDXL base model
-4. Quality validation via CLIP similarity
-5. Upload artifacts to S3
-6. Register model in DynamoDB
-7. Send completion event to SQS
+2. Pre-validate images (resolution, sharpness, lighting, faces, duplicates)
+3. Preprocess (face detection, alignment, augmentation, captioning)
+4. Train LoRA adapters on SDXL base model
+5. Quality validation via CLIP similarity
+6. Upload artifacts to S3
+7. Register model in DynamoDB
+8. Send completion event to SQS
 """
 
 from __future__ import annotations
@@ -35,11 +36,13 @@ from shared.dynamodb_client import DynamoDBClient
 from shared.logger import get_logger
 from shared.s3_client import S3Client
 from shared.sqs_consumer import SqsConsumer
+from training.image_validator import validate_training_images
 
 logger = get_logger(__name__)
 
 # Minimum number of training images required to start a fine-tuning job.
-MIN_TRAINING_IMAGES = 10
+# 20 is the recommended minimum for LoRA/DreamBooth identity fidelity.
+MIN_TRAINING_IMAGES = 20
 
 # Image file extensions accepted for training.
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -816,7 +819,30 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         raw_dir = work_dir / "raw"
         image_paths = download_training_images(s3_client, s3_image_prefix, raw_dir)
 
-        # Stage 2: Preprocess images with identity-conditioned captions.
+        # Stage 2: Pre-validate images (CPU-only, fast feedback).
+        validation_report = validate_training_images(image_paths)
+        if validation_report.passed < MIN_TRAINING_IMAGES:
+            failed_details = [{"path": r.path, "reasons": r.reasons} for r in validation_report.results if not r.passed]
+            raise TrainingPipelineError(
+                f"Too few images passed validation: {validation_report.passed} of "
+                f"{validation_report.total} passed (minimum {MIN_TRAINING_IMAGES}). "
+                f"Rejected: {failed_details}"
+            )
+        # Filter to only images that passed validation.
+        passed_paths = {r.path for r in validation_report.results if r.passed}
+        image_paths = [p for p in image_paths if str(p) in passed_paths]
+
+        logger.info(
+            "Pre-validation complete",
+            extra={
+                "total": validation_report.total,
+                "passed": validation_report.passed,
+                "failed": validation_report.failed,
+                "duplicates": len(validation_report.duplicate_groups),
+            },
+        )
+
+        # Stage 3: Preprocess images with identity-conditioned captions.
         preprocessed_dir = work_dir / "preprocessed"
         subject_token = training_params.get("subject_token", "sks person")
         preprocessed = preprocess_images(
@@ -827,21 +853,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             subject_token=subject_token,
         )
 
-        # Stage 3: Train LoRA model.
+        # Stage 4: Train LoRA model.
         model_dir = work_dir / "model"
         training_metrics = train_lora(preprocessed, config, model_dir, training_params)
 
-        # Stage 4: Quality validation.
+        # Stage 5: Quality validation.
         quality_metrics = validate_model_quality(
             model_dir,
             config,
             training_params,
         )
 
-        # Stage 5: Upload artifacts to S3.
+        # Stage 6: Upload artifacts to S3.
         s3_path = upload_artifacts(s3_client, model_dir, creator_id, job_id)
 
-        # Stage 6: Register model in DynamoDB.
+        # Stage 7: Register model in DynamoDB.
         training_config = {
             "base_model": training_params.get("base_model", config.base_model_id),
             "lora_rank": training_params.get("lora_rank", config.lora_rank),
@@ -861,7 +887,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             training_config=training_config,
         )
 
-        # Stage 7: Send completion event to SQS.
+        # Stage 8: Send completion event to SQS.
         combined_metrics = {**training_metrics, **quality_metrics}
         send_completion_event(
             sqs_client,
