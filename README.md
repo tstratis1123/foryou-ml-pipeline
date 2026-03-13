@@ -16,14 +16,17 @@ moderation/              # Content safety scanning
 watermark/               # Per-customer watermark embedding
   image_watermark.py     # DwtDctSvd invisible steganography (CPU, <1s)
   video_watermark.py     # VideoSeal neural watermarking (GPU)
+  train_videoseal.py     # VideoSeal training pipeline (adversarial, with robustness augmentations)
 shared/                  # Shared utilities
   config.py              # Pydantic config from environment variables
   s3_client.py           # S3 upload/download helpers
   sqs_consumer.py        # SQS message consumer base class
   dynamodb_client.py     # Model registry CRUD (DynamoDB)
+  consent_client.py      # HTTP consent verification client
   logger.py              # Structured JSON logging
 tests/                   # Unit tests
   test_config.py         # Config loader tests
+  test_watermark_robustness.py  # Robustness tests for image + video watermarks
 pyproject.toml           # Python project config (dependencies, linting, testing)
 requirements.txt         # Flat dependency list (used by Dockerfile)
 Dockerfile               # GPU-enabled image (CUDA 12.1)
