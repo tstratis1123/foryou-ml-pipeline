@@ -8,7 +8,8 @@ Part of the [ForYou Platform](https://github.com/tstratis1123/foryou-platform). 
 
 ```
 training/                # LoRA/DreamBooth fine-tuning pipeline
-  pipeline.py            # 7-stage training orchestration
+  pipeline.py            # 8-stage training orchestration
+  image_validator.py     # CPU pre-validation (resolution, sharpness, lighting, faces, duplicates)
 generation/              # Inference serving and content synthesis
   pipeline.py            # Dual-track generation (image + video)
 moderation/              # Content safety scanning
@@ -26,6 +27,7 @@ shared/                  # Shared utilities
   logger.py              # Structured JSON logging
 tests/                   # Unit tests
   test_config.py         # Config loader tests
+  test_image_validator.py       # Image pre-validation tests
   test_watermark_robustness.py  # Robustness tests for image + video watermarks
 pyproject.toml           # Python project config (dependencies, linting, testing)
 requirements.txt         # Flat dependency list (used by Dockerfile)
@@ -47,6 +49,8 @@ Both image and video generation share the same LoRA avatar model and preprocessi
 - **S3 retry with backoff** — Exponential backoff (1s → 2s → 4s, 3 attempts) with non-retryable error detection (NoSuchKey, AccessDenied skip retries). Connection/read timeouts configured (10s/30s).
 
 ### Training Pipeline
+- **Image pre-validation** — CPU-only quality checks before GPU training: minimum resolution (512x512), sharpness (Laplacian variance), lighting (exposure), single-face enforcement, face-size ratio, and near-duplicate detection (perceptual hashing). Performers get specific rejection reasons per image.
+- **Minimum 20 images** — Recommended minimum for LoRA/DreamBooth identity fidelity. Pipeline aborts with detailed feedback if too few pass validation.
 - **Cosine annealing LR scheduler** — Learning rate decays smoothly to 1% of initial value over the training run, avoiding sudden drops.
 - **Mixed precision training** — `torch.autocast` with fp16 on CUDA for ~2x training speed with minimal quality loss.
 - **Batched training** — Configurable batch size (default 4 on GPU, 1 on CPU) with gradient accumulation.
@@ -71,6 +75,7 @@ pytest tests/ -v
 | `test_sqs_consumer.py` | Message processing, failure handling, DLQ behaviour |
 | `test_s3_client.py` | Upload/download, retry logic, non-retryable errors, pagination |
 | `test_dynamodb_client.py` | CRUD operations, validation, queries |
+| `test_image_validator.py` | Resolution, sharpness, lighting, duplicate detection, report structure |
 | `test_watermark_robustness.py` | Image watermark survival (JPEG/scaling/noise), VideoSeal encode/decode shapes, augmentation pipeline |
 
 ## Setup
