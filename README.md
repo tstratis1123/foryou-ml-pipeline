@@ -39,6 +39,40 @@ Both image and video generation share the same LoRA avatar model and preprocessi
 - **Image**: Single-frame SDXL diffusion (5-15 seconds), DwtDctSvd watermark, delivery via CloudFront signed URLs
 - **Video**: Multi-frame AnimateDiff temporal diffusion (2-10 minutes), VideoSeal watermark, DRM encryption (Widevine + FairPlay + PlayReady), streaming delivery
 
+## Key Features
+
+### Safety & Reliability
+- **Consent verification** — Every generation and moderation job verifies performer consent via the Consent Service before processing. Revoked consent aborts the job immediately (Critical Invariant #1).
+- **SQS fault tolerance** — Failed messages stay on the queue for retry/DLQ instead of being silently deleted. Structured error logging for every failure.
+- **S3 retry with backoff** — Exponential backoff (1s → 2s → 4s, 3 attempts) with non-retryable error detection (NoSuchKey, AccessDenied skip retries). Connection/read timeouts configured (10s/30s).
+
+### Training Pipeline
+- **Cosine annealing LR scheduler** — Learning rate decays smoothly to 1% of initial value over the training run, avoiding sudden drops.
+- **Mixed precision training** — `torch.autocast` with fp16 on CUDA for ~2x training speed with minimal quality loss.
+- **Batched training** — Configurable batch size (default 4 on GPU, 1 on CPU) with gradient accumulation.
+- **Identity-conditioned captions** — BLIP-generated captions prefixed with DreamBooth subject token (`"a photo of sks person, {caption}"`) for stronger identity binding.
+
+### Video Watermark Training
+- **Adversarial training pipeline** (`watermark/train_videoseal.py`) — Trains encoder-decoder jointly: encoder minimises frame distortion (MSE) while decoder maximises payload recovery (BCE).
+- **Robustness augmentations** — JPEG compression, Gaussian noise, scaling, and cropping applied between encoder and decoder during training via straight-through estimation.
+- **Curriculum warmup** — First N epochs train without augmentations so networks learn basic embed/recover before facing distortions.
+- **Training features** — Cosine LR scheduling, AdamW optimiser, gradient clipping, early stopping, periodic checkpointing.
+
+## Tests
+
+```bash
+pytest tests/ -v
+```
+
+| Test file | Coverage |
+|-----------|----------|
+| `test_config.py` | Config defaults and env var loading |
+| `test_consent_client.py` | Consent check success, denial (403/404/422), unavailability (503/network/timeout) |
+| `test_sqs_consumer.py` | Message processing, failure handling, DLQ behaviour |
+| `test_s3_client.py` | Upload/download, retry logic, non-retryable errors, pagination |
+| `test_dynamodb_client.py` | CRUD operations, validation, queries |
+| `test_watermark_robustness.py` | Image watermark survival (JPEG/scaling/noise), VideoSeal encode/decode shapes, augmentation pipeline |
+
 ## Setup
 
 ```bash
