@@ -20,8 +20,8 @@ def _fresh_config():
 def test_config_defaults():
     """Config should populate defaults when env vars are missing."""
     with patch.dict(os.environ, {}, clear=True):
-        Config = _fresh_config()
-        config = Config()
+        config_cls = _fresh_config()
+        config = config_cls()
         assert config.aws_region == "us-east-1"
         assert config.lora_rank == 16
         assert config.training_steps == 1000
@@ -41,8 +41,8 @@ def test_config_from_env():
         "CONSENT_SERVICE_URL": "http://localhost:3002",
     }
     with patch.dict(os.environ, env, clear=True):
-        Config = _fresh_config()
-        config = Config()
+        config_cls = _fresh_config()
+        config = config_cls()
         assert config.aws_region == "eu-west-1"
         assert config.s3_bucket == "test-bucket"
         assert config.lora_rank == 32

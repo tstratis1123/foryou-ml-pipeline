@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 import boto3
 from botocore.config import Config as BotoConfig

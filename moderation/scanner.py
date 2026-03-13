@@ -115,27 +115,21 @@ def _ensure_face_detector_models() -> tuple[str, str]:
     proto_path = models_dir / "deploy.prototxt"
     model_path = models_dir / "res10_300x300_ssd_iter_140000.caffemodel"
 
-    _BASE = (
-        "https://raw.githubusercontent.com/opencv/opencv/master"
-        "/samples/dnn/face_detector"
-    )
-    _MODEL_BASE = (
-        "https://raw.githubusercontent.com/opencv/opencv_3rdparty"
-        "/dnn_samples_face_detector_20170830"
-    )
+    proto_base = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector"
+    model_base = "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830"
 
     if not proto_path.exists():
         logger.info("Downloading face detector prototxt")
         import urllib.request
 
-        urllib.request.urlretrieve(f"{_BASE}/deploy.prototxt", str(proto_path))
+        urllib.request.urlretrieve(f"{proto_base}/deploy.prototxt", str(proto_path))
 
     if not model_path.exists():
         logger.info("Downloading face detector caffemodel (~10 MB)")
         import urllib.request
 
         urllib.request.urlretrieve(
-            f"{_MODEL_BASE}/res10_300x300_ssd_iter_140000.caffemodel",
+            f"{model_base}/res10_300x300_ssd_iter_140000.caffemodel",
             str(model_path),
         )
 

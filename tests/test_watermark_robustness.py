@@ -20,12 +20,16 @@ import os
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 from PIL import Image
 
 from watermark.image_watermark import DwtDctSvdWatermark
+
+if TYPE_CHECKING:
+    from watermark.video_watermark import VideoSealWatermark
 
 
 # ---------------------------------------------------------------------------
@@ -225,9 +229,8 @@ class TestVideoSealRobustness:
     """
 
     @pytest.fixture()
-    def videoseal(self, tmp_path: Path) -> "VideoSealWatermark":
+    def videoseal(self, tmp_path: Path) -> VideoSealWatermark:
         """Create a VideoSeal instance with random weights."""
-        # Import here to avoid torch import overhead if image-only tests run.
         from watermark.video_watermark import VideoSealWatermark
 
         model_path = str(tmp_path / "nonexistent.pt")  # Forces random init.
@@ -237,7 +240,7 @@ class TestVideoSealRobustness:
             device="cpu",
         )
 
-    def test_encoder_produces_residual(self, videoseal: "VideoSealWatermark") -> None:
+    def test_encoder_produces_residual(self, videoseal: VideoSealWatermark) -> None:
         """Encoder should produce a residual with the same shape as the input."""
         import torch
 
@@ -249,7 +252,7 @@ class TestVideoSealRobustness:
 
         assert residual.shape == frames.shape
 
-    def test_decoder_produces_payload(self, videoseal: "VideoSealWatermark") -> None:
+    def test_decoder_produces_payload(self, videoseal: VideoSealWatermark) -> None:
         """Decoder should produce payload predictions with correct shape."""
         import torch
 
@@ -263,7 +266,7 @@ class TestVideoSealRobustness:
         assert predicted.min() >= 0.0
         assert predicted.max() <= 1.0
 
-    def test_embed_extract_shapes(self, videoseal: "VideoSealWatermark", tmp_path: Path) -> None:
+    def test_embed_extract_shapes(self, videoseal: VideoSealWatermark, tmp_path: Path) -> None:
         """Embed + extract roundtrip should produce bytes of expected length."""
         import cv2
 
@@ -278,7 +281,7 @@ class TestVideoSealRobustness:
         writer.release()
 
         output_path = str(tmp_path / "watermarked.mp4")
-        payload = b"\xAB\xCD\xEF\x01"
+        payload = b"\xab\xcd\xef\x01"
 
         videoseal.embed(video_path, payload, output_path)
 
@@ -288,9 +291,11 @@ class TestVideoSealRobustness:
         # Payload length in bytes = ceil(payload_length_bits / 8).
         assert len(extracted) == 32 // 8  # 4 bytes
 
-    def test_save_and_load_weights(self, videoseal: "VideoSealWatermark", tmp_path: Path) -> None:
+    def test_save_and_load_weights(self, videoseal: VideoSealWatermark, tmp_path: Path) -> None:
         """Saving and loading weights should produce identical state dicts."""
         import torch
+
+        from watermark.video_watermark import VideoSealWatermark
 
         save_path = str(tmp_path / "weights.pt")
         videoseal.save_weights(save_path)
@@ -302,9 +307,7 @@ class TestVideoSealRobustness:
         assert "decoder" in checkpoint
 
         # Verify the loaded state matches.
-        from watermark.video_watermark import VideoSealWatermark as VS
-
-        loaded = VS(model_path=save_path, payload_length=32, device="cpu")
+        loaded = VideoSealWatermark(model_path=save_path, payload_length=32, device="cpu")
 
         # Compare a forward pass — both should produce identical output.
         test_input = torch.rand(1, 3, 64, 64)
