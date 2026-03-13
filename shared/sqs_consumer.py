@@ -8,6 +8,10 @@ from typing import Any
 
 import boto3
 
+from shared.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class SqsConsumer(ABC):
     """Base class for services that consume messages from an SQS queue.
@@ -37,6 +41,10 @@ class SqsConsumer(ABC):
     def poll(self, max_messages: int = 1, wait_seconds: int = 20) -> None:
         """Long-poll the queue and process received messages.
 
+        On success the message is deleted from the queue.  On failure the
+        message is left in-flight so that it returns to the queue after the
+        visibility timeout expires and eventually lands in the DLQ.
+
         Args:
             max_messages: Maximum number of messages to receive per poll.
             wait_seconds: Long-poll wait time in seconds.
@@ -48,12 +56,21 @@ class SqsConsumer(ABC):
         )
 
         for message in response.get("Messages", []):
-            body: dict[str, Any] = json.loads(message["Body"])
-            self.process_message(body)
-            self._client.delete_message(
-                QueueUrl=self.queue_url,
-                ReceiptHandle=message["ReceiptHandle"],
-            )
+            message_id = message.get("MessageId", "unknown")
+            try:
+                body: dict[str, Any] = json.loads(message["Body"])
+                self.process_message(body)
+                self._client.delete_message(
+                    QueueUrl=self.queue_url,
+                    ReceiptHandle=message["ReceiptHandle"],
+                )
+                logger.info("Message processed successfully", extra={"message_id": message_id})
+            except Exception:
+                logger.error(
+                    "Failed to process message; leaving on queue for retry/DLQ",
+                    extra={"message_id": message_id},
+                    exc_info=True,
+                )
 
     def send_message(self, body: dict[str, Any]) -> None:
         """Publish a message to the queue.
