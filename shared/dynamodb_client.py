@@ -7,7 +7,7 @@ enforcement state.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import boto3
@@ -60,7 +60,7 @@ class DynamoDBClient:
         Raises:
             ModelRegistryError: If the put operation fails.
         """
-        now = datetime.now(tz=UTC).isoformat()
+        now = datetime.now(tz=timezone.utc).isoformat()
         item.setdefault("created_at", now)
         item.setdefault("updated_at", now)
 
@@ -126,7 +126,7 @@ class DynamoDBClient:
         Raises:
             ModelRegistryError: If the update operation fails.
         """
-        updates["updated_at"] = datetime.now(tz=UTC).isoformat()
+        updates["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
 
         # Build UpdateExpression dynamically.
         expr_parts: list[str] = []

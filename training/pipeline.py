@@ -16,7 +16,7 @@ import json
 import shutil
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -722,7 +722,7 @@ def send_completion_event(
             "clip_score": metrics.get("clip_score"),
             "steps_completed": metrics.get("steps_completed"),
         },
-        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
     }
 
     sqs_client.send_message(message)
