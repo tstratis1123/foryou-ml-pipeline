@@ -103,6 +103,45 @@ def _get_policy_classifier() -> Any:
         return _policy_classifier
 
 
+def _ensure_face_detector_models() -> tuple[str, str]:
+    """Download OpenCV DNN face detector model files if not present.
+
+    Returns:
+        Tuple of (proto_path, model_path) on disk.
+    """
+    models_dir = Path(__file__).resolve().parent / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    proto_path = models_dir / "deploy.prototxt"
+    model_path = models_dir / "res10_300x300_ssd_iter_140000.caffemodel"
+
+    _BASE = (
+        "https://raw.githubusercontent.com/opencv/opencv/master"
+        "/samples/dnn/face_detector"
+    )
+    _MODEL_BASE = (
+        "https://raw.githubusercontent.com/opencv/opencv_3rdparty"
+        "/dnn_samples_face_detector_20170830"
+    )
+
+    if not proto_path.exists():
+        logger.info("Downloading face detector prototxt")
+        import urllib.request
+
+        urllib.request.urlretrieve(f"{_BASE}/deploy.prototxt", str(proto_path))
+
+    if not model_path.exists():
+        logger.info("Downloading face detector caffemodel (~10 MB)")
+        import urllib.request
+
+        urllib.request.urlretrieve(
+            f"{_MODEL_BASE}/res10_300x300_ssd_iter_140000.caffemodel",
+            str(model_path),
+        )
+
+    return str(proto_path), str(model_path)
+
+
 def _get_face_detector() -> cv2.dnn.Net:
     """Return the cached OpenCV DNN face detector (Caffe SSD)."""
     global _face_detector
@@ -112,8 +151,7 @@ def _get_face_detector() -> cv2.dnn.Net:
         if _face_detector is not None:
             return _face_detector
         logger.info("Loading OpenCV DNN face detector")
-        proto_path = str(Path(__file__).resolve().parent / "models" / "deploy.prototxt")
-        model_path = str(Path(__file__).resolve().parent / "models" / "res10_300x300_ssd_iter_140000.caffemodel")
+        proto_path, model_path = _ensure_face_detector_models()
         net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
         if _config.device == "cuda" and cv2.cuda.getCudaEnabledDeviceCount() > 0:
             net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
