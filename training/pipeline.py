@@ -165,23 +165,30 @@ def _generate_caption(
     blip_processor: BlipProcessor,
     blip_model: BlipForConditionalGeneration,
     device: str,
+    subject_token: str = "sks person",
 ) -> str:
-    """Generate a text caption for a training image using BLIP.
+    """Generate an identity-conditioned caption for a training image.
+
+    Uses BLIP for a base description, then prepends an identity token
+    so the LoRA learns to associate the token with the performer's
+    appearance (DreamBooth-style).
 
     Args:
         image: PIL Image to caption.
         blip_processor: BLIP preprocessor.
         blip_model: BLIP captioning model.
         device: Torch device string.
+        subject_token: Unique subject identifier for identity conditioning.
 
     Returns:
-        Generated caption string.
+        Caption string prefixed with the subject token.
     """
     inputs = blip_processor(image, return_tensors="pt").to(device)
     with torch.no_grad():
         output_ids = blip_model.generate(**inputs, max_new_tokens=50)
-    caption: str = blip_processor.decode(output_ids[0], skip_special_tokens=True)
-    return caption
+    raw_caption: str = blip_processor.decode(output_ids[0], skip_special_tokens=True)
+    # Prefix with subject token for identity conditioning.
+    return f"a photo of {subject_token}, {raw_caption}"
 
 
 def preprocess_images(
@@ -189,6 +196,7 @@ def preprocess_images(
     output_dir: Path,
     target_size: int,
     device: str,
+    subject_token: str = "sks person",
 ) -> list[dict[str, Any]]:
     """Preprocess training images: face detect, align, augment, and caption.
 
@@ -197,6 +205,7 @@ def preprocess_images(
         output_dir: Directory to write preprocessed images and captions.
         target_size: Target resolution for training images (square).
         device: Torch device for captioning model.
+        subject_token: Unique identifier for identity-conditioned captions.
 
     Returns:
         List of dicts with keys ``image_path`` and ``caption`` for each
@@ -239,8 +248,8 @@ def preprocess_images(
         out_path = output_dir / f"img_{idx:04d}.png"
         pil_image.save(str(out_path))
 
-        # Generate caption.
-        caption = _generate_caption(pil_image, blip_processor, blip_model, device)
+        # Generate identity-conditioned caption.
+        caption = _generate_caption(pil_image, blip_processor, blip_model, device, subject_token)
 
         # Save caption alongside image.
         caption_path = output_dir / f"img_{idx:04d}.txt"
@@ -348,6 +357,14 @@ def train_lora(
     trainable_params = [p for p in unet.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=1e-2)
 
+    # Cosine annealing LR scheduler for smoother convergence.
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=training_steps, eta_min=learning_rate * 0.01
+    )
+
+    # Training batch size — higher gives better gradient estimates on GPU.
+    batch_size = training_params.get("batch_size", 4 if device == "cuda" else 1)
+
     # Build a simple dataset from preprocessed images.
     image_transform = transforms.Compose(
         [
@@ -367,37 +384,40 @@ def train_lora(
 
     dataset_size = len(images_tensors)
 
-    # Training loop.
+    # Training loop with mixed precision and batching.
     unet.train()
     total_loss = 0.0
     loss_count = 0
+    use_amp = device == "cuda"
 
     for step in range(training_steps):
-        # Sample a random image from the dataset.
-        idx = step % dataset_size
-        pixel_values = images_tensors[idx].unsqueeze(0).to(device, dtype=vae.dtype)
-        caption = captions[idx]
+        # Build a batch by sampling from the dataset.
+        batch_indices = [(step * batch_size + i) % dataset_size for i in range(batch_size)]
+        pixel_values = torch.stack([images_tensors[i] for i in batch_indices]).to(device, dtype=vae.dtype)
+        batch_captions = [captions[i] for i in batch_indices]
 
-        # Encode image to latent space.
+        # Encode images to latent space.
         with torch.no_grad():
             latents = vae.encode(pixel_values).latent_dist.sample()
             latents = latents * vae.config.scaling_factor
 
-        # Sample noise and timestep.
+        # Sample noise and timesteps.
         noise = torch.randn_like(latents)
-        timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (1,), device=device).long()
+        timesteps = torch.randint(
+            0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=device
+        ).long()
         noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-        # Encode text prompt with both SDXL text encoders.
+        # Encode text prompts with both SDXL text encoders.
         tokens_1 = tokenizer(
-            caption,
+            batch_captions,
             padding="max_length",
             max_length=tokenizer.model_max_length,
             truncation=True,
             return_tensors="pt",
         ).input_ids.to(device)
         tokens_2 = tokenizer_2(
-            caption,
+            batch_captions,
             padding="max_length",
             max_length=tokenizer_2.model_max_length,
             truncation=True,
@@ -417,36 +437,44 @@ def train_lora(
             )
 
         # Build added_cond_kwargs for SDXL.
-        add_time_ids = torch.zeros((1, 6), device=device, dtype=text_embeds.dtype)
+        add_time_ids = torch.zeros((batch_size, 6), device=device, dtype=text_embeds.dtype)
         added_cond_kwargs = {
             "text_embeds": pooled_output,
             "time_ids": add_time_ids,
         }
 
-        # Predict noise with UNet.
-        noise_pred = unet(
-            noisy_latents,
-            timesteps,
-            encoder_hidden_states=text_embeds,
-            added_cond_kwargs=added_cond_kwargs,
-        ).sample
+        # Forward pass with mixed precision (fp16 on GPU).
+        with torch.autocast(device_type="cuda", enabled=use_amp):
+            noise_pred = unet(
+                noisy_latents,
+                timesteps,
+                encoder_hidden_states=text_embeds,
+                added_cond_kwargs=added_cond_kwargs,
+            ).sample
 
-        # Compute MSE loss against the target noise.
-        loss = torch.nn.functional.mse_loss(noise_pred, noise)
+            # Compute MSE loss against the target noise.
+            loss = torch.nn.functional.mse_loss(noise_pred, noise)
 
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
         optimizer.step()
+        lr_scheduler.step()
 
         total_loss += loss.item()
         loss_count += 1
 
         if (step + 1) % 100 == 0 or step == 0:
             avg_loss = total_loss / loss_count
+            current_lr = lr_scheduler.get_last_lr()[0]
             logger.info(
                 "Training progress",
-                extra={"step": step + 1, "total_steps": training_steps, "avg_loss": avg_loss},
+                extra={
+                    "step": step + 1,
+                    "total_steps": training_steps,
+                    "avg_loss": avg_loss,
+                    "lr": current_lr,
+                },
             )
 
     # Save LoRA weights as safetensors.
@@ -522,10 +550,10 @@ def validate_model_quality(
     clip_model.eval()
 
     validation_prompts = [
-        "a photo of the person, high quality, detailed face",
-        "a portrait of the person, studio lighting",
-        "the person looking at camera, natural light",
-        "a close-up photo of the person, sharp focus",
+        "a photo of sks person, high quality, detailed face",
+        "a portrait of sks person, studio lighting",
+        "sks person looking at camera, natural light",
+        "a close-up photo of sks person, sharp focus",
     ]
 
     sample_dir = lora_dir / "samples"
@@ -790,13 +818,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         raw_dir = work_dir / "raw"
         image_paths = download_training_images(s3_client, s3_image_prefix, raw_dir)
 
-        # Stage 2: Preprocess images.
+        # Stage 2: Preprocess images with identity-conditioned captions.
         preprocessed_dir = work_dir / "preprocessed"
+        subject_token = training_params.get("subject_token", "sks person")
         preprocessed = preprocess_images(
             image_paths,
             preprocessed_dir,
             target_size=training_params.get("resolution", config.image_resolution),
             device=config.device,
+            subject_token=subject_token,
         )
 
         # Stage 3: Train LoRA model.
