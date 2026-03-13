@@ -503,3 +503,36 @@ def scan(
     )
 
     return ScanResult(approved=approved, violations=violations, scores=scores)
+
+
+def scan_with_consent_check(
+    media_path: str,
+    media_type: Literal["image", "video"],
+    performer_id: str,
+    consent_base_url: str,
+    policy: dict[str, Any] | None = None,
+) -> ScanResult:
+    """Run content moderation with a consent pre-check.
+
+    Verifies consent is active before running the scan.  Per Critical
+    Invariant #1, no content processing without consent verification.
+
+    Args:
+        media_path: Local filesystem path to the image or video file.
+        media_type: Either ``"image"`` or ``"video"``.
+        performer_id: UUID of the performer whose content is being scanned.
+        consent_base_url: Base URL of the Consent Service.
+        policy: Optional policy overrides (see :func:`scan`).
+
+    Returns:
+        A :class:`ScanResult`.
+
+    Raises:
+        ConsentDeniedError: If consent is not active.
+        ConsentCheckUnavailableError: If the consent service is unreachable.
+    """
+    from shared.consent_client import ConsentClient
+
+    consent_client = ConsentClient(base_url=consent_base_url)
+    consent_client.check_consent(performer_id, media_type)
+    return scan(media_path, media_type, policy)

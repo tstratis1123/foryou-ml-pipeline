@@ -19,6 +19,9 @@ class Config(BaseModel):
     sqs_training_queue_url: str = os.getenv("SQS_TRAINING_QUEUE_URL", "")
     sqs_generation_queue_url: str = os.getenv("SQS_GENERATION_QUEUE_URL", "")
 
+    # Consent Service
+    consent_service_url: str = os.getenv("CONSENT_SERVICE_URL", "http://consent-service:3002")
+
     # Model defaults
     base_model_id: str = os.getenv("BASE_MODEL_ID", "stabilityai/stable-diffusion-xl-base-1.0")
     lora_rank: int = int(os.getenv("LORA_RANK", "16"))

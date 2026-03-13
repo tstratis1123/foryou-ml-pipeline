@@ -386,6 +386,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     job_id: str = event["job_id"]
     creator_id: str = event["creator_id"]
+    performer_id: str = event.get("performer_id", creator_id)
     model_s3_path: str = event["model_s3_path"]
     prompt: str = event["prompt"]
     media_type: Literal["image", "video"] = event["media_type"]
@@ -399,6 +400,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
 
     config = Config()
+
+    # ------------------------------------------------------------------
+    # Stage 0: Consent verification (Critical Invariant #1)
+    # ------------------------------------------------------------------
+    from shared.consent_client import ConsentClient
+
+    consent_client = ConsentClient(base_url=config.consent_service_url)
+    consent_client.check_consent(performer_id, media_type)
+
     s3 = S3Client(bucket=config.s3_bucket, region=config.aws_region)
 
     # ------------------------------------------------------------------
