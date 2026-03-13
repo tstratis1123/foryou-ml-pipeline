@@ -1,0 +1,34 @@
+# AWS
+boto3
+
+# PyTorch ecosystem
+torch
+torchvision
+
+# Diffusion models
+diffusers
+transformers
+accelerate
+peft
+safetensors
+
+# Image / video processing
+Pillow
+opencv-python
+opencv-contrib-python
+numpy
+
+# Face detection (training preprocessing)
+insightface
+onnxruntime
+
+# Watermarking
+PyWavelets
+scipy
+
+# Configuration
+pydantic
+python-dotenv
+
+# OCR (optional — moderation contact-info detection)
+# pytesseract
